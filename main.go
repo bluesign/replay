@@ -37,7 +37,7 @@ func main() {
 		panic(err)
 	}
 	height := resp.GetBlock().Height - 1000
-
+	height = 93937485
 	execFollower, err := client.NewExecutionDataClient(
 		accessUrl,
 		chain,
@@ -156,14 +156,17 @@ func main() {
 						fmt.Println(err)
 					}
 
-					// check computation used
-					if txResult.ComputationUsed != executor.Output().ComputationUsed {
-						panic("Computation used does not match")
-					}
-
 					// check error
 					if executor.Output().Err != nil && !txResult.Failed {
+						fmt.Println("Error:", executor.Output().Err)
 						panic("error mismatch")
+					}
+
+					// check computation used
+					if txResult.ComputationUsed != executor.Output().ComputationUsed {
+						fmt.Println("Computation used:", executor.Output().ComputationUsed)
+						fmt.Println("Computation Expected:", txResult.ComputationUsed)
+						panic("Computation used does not match")
 					}
 
 					// check events

@@ -234,16 +234,16 @@ func (c *ExecutionDataClient) LedgerByHeight(
 			if status.Code(err) != codes.NotFound {
 				return nil, err
 			}
+
 		}
 
 		if response != nil && len(response.Values) > 0 {
 			value = response.Values[0]
+		} else {
+			fmt.Println("Register not found", id.String())
 		}
 
 		c.cache[id] = value
-		if err != nil {
-			return nil, fmt.Errorf("could not cache ledger value: %w", err)
-		}
 
 		return value, nil
 	}), nil
