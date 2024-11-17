@@ -37,7 +37,7 @@ func main() {
 		panic(err)
 	}
 	height := resp.GetBlock().Height - 1000
-	height = 93937485
+
 	execFollower, err := client.NewExecutionDataClient(
 		accessUrl,
 		chain,
@@ -62,7 +62,7 @@ func main() {
 			if execSubscription.Err() != nil || !ok {
 				panic(execSubscription.Err())
 			}
-			fmt.Println("Received execution:", executionData.Height)
+			fmt.Println("Received execution for height:", executionData.Height)
 
 			current, err := api.GetBlockByHeight(context.Background(), &access.GetBlockByHeightRequest{
 				Height:            executionData.Height,
@@ -124,7 +124,11 @@ func main() {
 				for i, transaction := range chunk.Collection.Transactions {
 					txResult := chunk.TransactionResults[i]
 
-					fmt.Println("transaction", index, transaction.ID(), txResult.TransactionID)
+					fmt.Println("transaction", index, transaction.ID())
+
+					if transaction.ID() != txResult.TransactionID {
+						panic("invalid transaction ID")
+					}
 
 					if ci == len(executionData.ExecutionData.ChunkExecutionDatas)-1 {
 						//system transaction
