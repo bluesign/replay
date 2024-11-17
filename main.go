@@ -110,7 +110,7 @@ func main() {
 					fvm.WithBlocks(blocks),
 					fvm.WithTransactionFeesEnabled(true),
 					fvm.WithEntropyProvider(entropyProvider),
-					fvm.WithCadenceLogging(true),
+					fvm.WithCadenceLogging(false),
 					fvm.WithAccountStorageLimit(true),
 					fvm.WithAuthorizationChecksEnabled(true),
 					fvm.WithSequenceNumberCheckAndIncrementEnabled(true),
