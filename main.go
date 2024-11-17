@@ -36,7 +36,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	height := resp.GetBlock().Height - 100
+	height := resp.GetBlock().Height - 1000
 
 	execFollower, err := client.NewExecutionDataClient(
 		accessUrl,
