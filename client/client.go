@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"github.com/onflow/flow-go/fvm/storage/snapshot"
 	"github.com/onflow/flow/protobuf/go/flow/entities"
@@ -225,6 +226,9 @@ func (c *ExecutionDataClient) LedgerByHeight(
 		// FVM expects an empty byte array if the value is not found
 		value := []byte{}
 
+		if hex.EncodeToString([]byte(id.Owner)) == "d421a63faae318f9" {
+			fmt.Println("RegisterID", id.Key)
+		}
 		registerID := convert.RegisterIDToMessage(flow.RegisterID{Key: id.Key, Owner: id.Owner})
 		response, err := c.client.GetRegisterValues(ctx, &executiondata.GetRegisterValuesRequest{
 			BlockHeight: lookupHeight,
@@ -242,7 +246,9 @@ func (c *ExecutionDataClient) LedgerByHeight(
 		} else {
 			fmt.Println("Register not found", id.String())
 		}
-
+		if hex.EncodeToString([]byte(id.Owner)) == "d421a63faae318f9" {
+			fmt.Println("RegisterValue", hex.EncodeToString(value))
+		}
 		c.cache[id] = value
 
 		return value, nil

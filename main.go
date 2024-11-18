@@ -100,7 +100,22 @@ func main() {
 			index := 0
 			fmt.Println("Processing Block", currentBlock.Header.Height, currentBlock.ID())
 
+			if len(executionData.ExecutionData.ChunkExecutionDatas) != 1 {
+				continue
+			}
 			for ci, chunk := range executionData.ExecutionData.ChunkExecutionDatas {
+
+				for _, update := range chunk.TrieUpdate.Payloads {
+					if update == nil {
+						continue
+					}
+
+					key, _ := update.Key()
+					if hex.EncodeToString(key.KeyParts[0].Value) == "d421a63faae318f9" {
+						fmt.Println(hex.EncodeToString(key.KeyParts[0].Value), string(key.KeyParts[1].Value), hex.EncodeToString(update.Value()))
+					}
+
+				}
 
 				var writes = make(map[flow.RegisterID]flow.RegisterValue)
 				eventIndex := 0
@@ -168,7 +183,11 @@ func main() {
 					if update == nil {
 						continue
 					}
+
 					key, err := update.Key()
+
+					fmt.Println(string(key.KeyParts[1].Value), hex.EncodeToString(update.Value()))
+
 					panicOnError(err)
 
 					rid, err := convert2.LedgerKeyToRegisterID(key)
@@ -187,6 +206,8 @@ func main() {
 				if len(writes) > 0 {
 					panic("missing writes")
 				}
+
+				panic("should have paniced")
 
 				if len(chunk.Events) != eventIndex {
 					panic("Event count mismatch")
