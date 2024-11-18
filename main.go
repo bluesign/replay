@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/bluesign/replay/client"
 	"github.com/bluesign/replay/replay"
-	"github.com/onflow/cadence/encoding/ccf"
 	"github.com/onflow/flow-go/engine/common/rpc/convert"
 	"github.com/onflow/flow-go/engine/execution/computation/computer"
 	"github.com/onflow/flow-go/fvm"
@@ -21,21 +20,23 @@ import (
 	"google.golang.org/grpc/encoding/gzip"
 )
 
+func panicOnError(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
 func main() {
 	ctx := context.Background()
 	accessUrl := "access-007.mainnet26.nodes.onflow.org:9000"
 	chain := flow.Mainnet.Chain()
 
 	conn, err := grpc.Dial(accessUrl, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		panic(err)
-	}
+	panicOnError(err)
 	api := access.NewAccessAPIClient(conn)
 
 	resp, err := api.GetLatestBlockHeader(ctx, &access.GetLatestBlockHeaderRequest{})
-	if err != nil {
-		panic(err)
-	}
+	panicOnError(err)
 	height := resp.GetBlock().Height - 1000
 
 	execFollower, err := client.NewExecutionDataClient(
@@ -46,15 +47,10 @@ func main() {
 			grpc.UseCompressor(gzip.Name)),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
+	panicOnError(err)
 
-	if err != nil {
-		panic(err)
-	}
 	execSubscription, err := execFollower.SubscribeExecutionData(ctx, flow.ZeroID, uint64(height))
-
-	if err != nil {
-		panic(err)
-	}
+	panicOnError(err)
 
 	for {
 		select {
@@ -68,155 +64,104 @@ func main() {
 				Height:            executionData.Height,
 				FullBlockResponse: true,
 			})
-			if err != nil {
-				panic(err)
-			}
+			panicOnError(err)
 
 			currentBlock, err := convert.MessageToBlock(current.GetBlock())
-			if err != nil {
-				panic(err)
-			}
+			panicOnError(err)
 
 			next, err := api.GetBlockByHeight(context.Background(), &access.GetBlockByHeightRequest{
 				Height:            executionData.Height + 1,
 				FullBlockResponse: true,
 			})
-			if err != nil {
-				panic(err)
-			}
+			panicOnError(err)
 
 			nextBlock, err := convert.MessageToBlock(next.GetBlock())
-			if err != nil {
-				panic(err)
-			}
+			panicOnError(err)
 
-			var entropyProvider = replay.NewEntropyProvider(nextBlock.Header)
-
-			blocks := replay.NewBlocks(api)
+			fvmContext := fvm.NewContext(
+				fvm.WithChain(chain),
+				fvm.WithBlockHeader(currentBlock.Header),
+				fvm.WithBlocks(replay.NewBlocks(api)),
+				fvm.WithTransactionFeesEnabled(true),
+				fvm.WithEntropyProvider(replay.NewEntropyProvider(nextBlock.Header)),
+				fvm.WithCadenceLogging(false),
+				fvm.WithAccountStorageLimit(true),
+				fvm.WithAuthorizationChecksEnabled(true),
+				fvm.WithSequenceNumberCheckAndIncrementEnabled(true),
+				fvm.WithEVMEnabled(true),
+				fvm.WithMemoryLimit(4*1024*1024*1024), //4GB
+				fvm.WithComputationLimit(10_000),      //10k
+			)
 
 			snap, err := execFollower.LedgerByHeight(ctx, executionData.Height-1)
-			if err != nil {
-				panic(err)
-			}
+			panicOnError(err)
 
 			blockDatabase := fvmStorage.NewBlockDatabase(snap, 0, nil)
 			index := 0
 			fmt.Println("Processing Block", currentBlock.Header.Height, currentBlock.ID())
+
 			for ci, chunk := range executionData.ExecutionData.ChunkExecutionDatas {
 
-				fvmContext := fvm.NewContext(
-					fvm.WithChain(chain),
-					fvm.WithBlockHeader(currentBlock.Header),
-					fvm.WithBlocks(blocks),
-					fvm.WithTransactionFeesEnabled(true),
-					fvm.WithEntropyProvider(entropyProvider),
-					fvm.WithCadenceLogging(false),
-					fvm.WithAccountStorageLimit(true),
-					fvm.WithAuthorizationChecksEnabled(true),
-					fvm.WithSequenceNumberCheckAndIncrementEnabled(true),
-					fvm.WithEVMEnabled(true),
-					fvm.WithMemoryLimit(4*1024*1024*1024), //4GB
-					fvm.WithComputationLimit(10_000),      //10k
-				)
-
-				var writes map[flow.RegisterID]flow.RegisterValue = make(map[flow.RegisterID]flow.RegisterValue)
+				var writes = make(map[flow.RegisterID]flow.RegisterValue)
+				eventIndex := 0
 
 				for i, transaction := range chunk.Collection.Transactions {
-					txResult := chunk.TransactionResults[i]
 
 					fmt.Println("transaction", index, transaction.ID())
-
+					txResult := chunk.TransactionResults[i]
 					if transaction.ID() != txResult.TransactionID {
-						panic("invalid transaction ID")
-					}
-
-					if ci == len(executionData.ExecutionData.ChunkExecutionDatas)-1 {
-						//system transaction
-						fvmContext = fvm.NewContextFromParent(
-							fvmContext,
-							fvm.WithContractDeploymentRestricted(false),
-							fvm.WithContractRemovalRestricted(false),
-							fvm.WithAuthorizationChecksEnabled(false),
-							fvm.WithSequenceNumberCheckAndIncrementEnabled(false),
-							fvm.WithTransactionFeesEnabled(false),
-							fvm.WithEventCollectionSizeLimit(computer.SystemChunkEventCollectionMaxSize),
-							fvm.WithMemoryAndInteractionLimitsDisabled(),
-							// only the system transaction is allowed to call the block entropy provider
-							fvm.WithRandomSourceHistoryCallAllowed(true),
-						)
+						panic(fmt.Sprintf("invalid transaction ID: %s vs %s", transaction.ID(), txResult.TransactionID))
 					}
 					proc := fvm.Transaction(transaction, uint32(index))
-
+					index++
 					txnState, err := blockDatabase.NewTransaction(proc.ExecutionTime(), fvmState.DefaultParameters())
 					if err != nil {
 						panic(err)
 					}
-					index++
 
-					executor := proc.NewExecutor(fvmContext, txnState)
-					err = fvm.Run(executor)
-
-					if err != nil {
-						fmt.Println(err)
+					//system transaction
+					if ci == len(executionData.ExecutionData.ChunkExecutionDatas)-1 {
+						fvmContext = computer.SystemChunkContext(fvmContext, nil)
 					}
+
+					//execute transaction
+					executor := proc.NewExecutor(fvmContext, txnState)
+					panicOnError(fvm.Run(executor))
 
 					// check error
 					if executor.Output().Err != nil && !txResult.Failed {
-						fmt.Println("Error:", executor.Output().Err)
-						panic("error mismatch")
+						panic(fmt.Sprintf("error mismatch: %s", executor.Output().Err))
 					}
 
 					// check computation used
 					if txResult.ComputationUsed != executor.Output().ComputationUsed {
-						fmt.Println("Computation used:", executor.Output().ComputationUsed)
-						fmt.Println("Computation Expected:", txResult.ComputationUsed)
-						panic("Computation used does not match")
+						panic(fmt.Sprintf("Computation used does not match: %d vs %d",
+							txResult.ComputationUsed,
+							executor.Output().ComputationUsed,
+						))
 					}
 
-					// check events
 					for _, event := range executor.Output().Events {
-						found := false
-						for _, chunkEvent := range chunk.Events {
-							if event.TransactionID == chunkEvent.TransactionID && event.EventIndex == chunkEvent.EventIndex {
-								found = true
-
-								if event.Type != chunkEvent.Type {
-									fmt.Println("mismatched event type", event.Type, chunkEvent.Type)
-
-									panic("mismatched event type")
-								}
-								if !bytes.Equal(event.Payload, chunkEvent.Payload) {
-									fmt.Println(hex.EncodeToString(event.Payload), hex.EncodeToString(chunkEvent.Payload))
-									v, _ := ccf.NewDecoder(nil, event.Payload).Decode()
-									c, _ := ccf.NewDecoder(nil, chunkEvent.Payload).Decode()
-									fmt.Println(v)
-									fmt.Println(c)
-
-									panic("mismatched event payload")
-								}
-							}
+						if eventIndex > len(chunk.Events)-1 {
+							panic("Extra event emitted")
 						}
-						if !found {
-							fmt.Println("Event", event)
-							panic("missing event")
+						chunkEvent := chunk.Events[eventIndex]
+						if !bytes.Equal(chunkEvent.Fingerprint(), event.Fingerprint()) {
+							panic("Event fingerprint mismatch")
 						}
+						eventIndex++
 					}
 
-					if err != nil {
-						panic(err)
-					}
-
-					txnState.Finalize()
+					panicOnError(txnState.Finalize())
 					resultSnapshot, err := txnState.Commit()
+
+					panicOnError(err)
 
 					for regID, regValue := range resultSnapshot.WriteSet {
 						writes[regID] = regValue
 						execFollower.Set(regID, regValue)
 					}
 
-					if err != nil {
-						panic(err)
-					}
 				}
 
 				for _, update := range chunk.TrieUpdate.Payloads {
@@ -224,40 +169,28 @@ func main() {
 						continue
 					}
 					key, err := update.Key()
-					if err != nil {
-						panic(err)
-					}
+					panicOnError(err)
 
 					rid, err := convert2.LedgerKeyToRegisterID(key)
-					if err != nil {
-						panic(err)
-					}
+					panicOnError(err)
 
 					written, ok := writes[rid]
 					if !ok {
-						fmt.Println("rid:", rid)
-						v, _ := snap.Get(rid)
-						fmt.Println(hex.EncodeToString(v), hex.EncodeToString(update.Value()))
-						panic("missing write")
+						panic(fmt.Sprintf("missing write: %s", rid))
 					}
-
 					if !bytes.Equal(written, update.Value()) {
-						fmt.Println("rid:", rid)
-						fmt.Println(hex.EncodeToString(written), hex.EncodeToString(update.Value()))
-						panic("different write")
+						panic(fmt.Sprintf("different write: %s %s <-> %s ", rid, hex.EncodeToString(update.Value()), hex.EncodeToString(written)))
 					}
 					delete(writes, rid)
-
 				}
 
 				if len(writes) > 0 {
-					panic("missing writes2")
+					panic("missing writes")
 				}
 
-			}
-
-			if !ok {
-				break
+				if len(chunk.Events) != eventIndex {
+					panic("Event count mismatch")
+				}
 			}
 		}
 	}
